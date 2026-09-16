@@ -167,10 +167,16 @@ live one.
 | Coverage | Any bucket that was not fully sampled is marked, so a day the machine was off for 18 hours never reads as a low-consumption day |
 | Settings | A gear in the top-right corner opens a config pane: price, currency, the estimate constants, and the sampling options, each with its units and what it does |
 
-The graph follows the same filter as the breakdown. For a window longer
-than `raw_retention_days` (default 30) it is drawn from the permanent daily
-rollup at one point per day rather than from raw samples: those rows are
-pruned at that age, so a year of interval points does not exist to plot.
+The graph follows the same filter as the breakdown. When the selected
+period reaches back further than the recorded history, the x axis starts
+at the first recorded point instead of at the window start: with only a
+few days of history, a Month or Year view plots those days across the
+full width rather than squeezing them against the right edge. The hover
+readout's dates are how you read the range actually shown. For a window
+longer than `raw_retention_days` (default 30) it is drawn from the
+permanent daily rollup at one point per day rather than from raw samples:
+those rows are pruned at that age, so a year of interval points does not
+exist to plot.
 
 <p align="center">
   <img src="docs/settings.png" alt="The settings pane: price per kWh, a currency picker, a symbol override, and decimal places" width="380">
@@ -387,6 +393,12 @@ deliberately not used, sample counts, and how many intervals were dropped.
 | `highWattThreshold` | 300 | Urgent colour at or above this many watts |
 | `barLabelMode` | `watts` | `watts` / `todayKwh` / `monthKwh`. Right-click to cycle |
 | `chartCustomDays` | 14 | Days the graph and the breakdown span when the Custom filter is selected. 1-365 |
+| `chartHoverLabelColor` | `#000000` | Hex colour of the background behind the graph's hover readout (`#RGB`, `#RRGGBB`, or `#AARRGGBB`) |
+| `chartHoverLabelOpacity` | 50 | How opaque that background is, 0-100. 0 is invisible, 100 is solid |
+
+The hover readout sits on top of the trace, and on a busy graph the text
+and the line compete, so the readout gets a background you can tune to
+your theme.
 
 **Backend**: one source of truth, `~/.config/omarchy-energy/config.json`.
 You never need to hand-edit it. Every key below is editable from the panel's

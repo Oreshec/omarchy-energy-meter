@@ -21,7 +21,9 @@
       "refreshIntervalSec": 5,
       "highWattThreshold": 300,
       "barLabelMode": "watts",
-      "chartCustomDays": 14
+      "chartCustomDays": 14,
+      "chartHoverLabelColor": "#000000",
+      "chartHoverLabelOpacity": 50
     },
     "schema": [
       {
@@ -61,6 +63,23 @@
         "max": 365,
         "step": 1,
         "defaultValue": 14
+      },
+      {
+        "key": "chartHoverLabelColor",
+        "type": "string",
+        "label": "Hover label background",
+        "description": "The background drawn behind the graph's hover readout, given as a hex colour (`#RGB`, `#RRGGBB` or `#AARRGGBB`).",
+        "defaultValue": "#000000"
+      },
+      {
+        "key": "chartHoverLabelOpacity",
+        "type": "integer",
+        "label": "Hover label opacity (%)",
+        "description": "How opaque that background is. 0 is invisible and 100 is solid.",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "defaultValue": 50
       }
     ]
   }

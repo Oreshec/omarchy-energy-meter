@@ -21,6 +21,11 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   already there; Custom is the one whose length is yours rather than a
   calendar bucket.
 
+- A background behind the graph's hover readout, because the text sat on
+  the trace and was illegible where the two crossed. Colour is the new
+  `chartHoverLabelColor` widget setting (hex, default `#000000`) and
+  opacity is `chartHoverLabelOpacity` (0-100%, default 50).
+
 **Changed**
 
 - The panel graph follows the selected period instead of always drawing the
@@ -35,6 +40,12 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   exist to plot. The rollup is what the week/month/year buckets already
   use; the graph now uses it too when the requested window is older than
   the samples table can still hold.
+
+- The graph's axis starts at the first recorded point when the selected
+  period predates the history. A Month or Year window with only a few
+  days of data used to plot those days as a sliver against the right
+  edge, which is what made those views look empty; they now fill the
+  plot the way Day already did.
 
 ## 1.2.5
 

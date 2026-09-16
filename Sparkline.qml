@@ -13,6 +13,8 @@ Item {
   property color lineColor: Color.foreground
   property color fillColor: Qt.rgba(lineColor.r, lineColor.g, lineColor.b, 0.14)
   property color crosshairColor: Color.accent
+  property color hoverLabelColor: "#000000"
+  property real hoverLabelOpacity: 0.5
   property color dim: Qt.darker(lineColor, 1.55)
   property string fontFamily: Style.font.family
   // A peak is one sample tall. At 1.75 px the stroke was wider than the
@@ -69,6 +71,10 @@ Item {
     var t0 = t1 - root.spanSeconds
     var first = tsOf(list[0])
     if (first > 0 && first < t0) t0 = first
+    // A window far longer than the recorded history otherwise pins every
+    // point against the right edge, which is what made Month and Year
+    // look broken.
+    if (first > 0 && first > t0) t0 = first
     if (!(t1 > t0)) t1 = t0 + 1
     return { t0: t0, t1: t1 }
   }
@@ -230,25 +236,36 @@ Item {
     border.color: root.lineColor
   }
 
-  Text {
-    id: readout
-    textFormat: Text.PlainText
+  // Bare hover text sat on the trace and was hard to read.
+  Rectangle {
+    id: readoutBg
     visible: root.hover !== null
-    text: root.formatHover(root.hover)
-    color: root.lineColor
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
-    font.bold: true
+    color: Qt.rgba(root.hoverLabelColor.r, root.hoverLabelColor.g, root.hoverLabelColor.b, root.hoverLabelOpacity)
+    radius: Style.space(4)
+    width: readout.implicitWidth + Style.space(4) * 2
+    height: readout.implicitHeight + Style.space(4) * 2
     x: {
       if (!root.hover) return 0
       var left = root.hover.x + Style.space(8)
-      if (left + implicitWidth > root.width - 2) return Math.max(0, root.hover.x - implicitWidth - Style.space(8))
+      if (left + width > root.width - 2) return Math.max(0, root.hover.x - width - Style.space(8))
       return left
     }
     y: {
       if (!root.hover) return 0
-      var top = root.hover.y - implicitHeight - Style.space(4)
+      var top = root.hover.y - height - Style.space(4)
       return top < 0 ? root.hover.y + Style.space(6) : top
+    }
+
+    Text {
+      id: readout
+      textFormat: Text.PlainText
+      visible: root.hover !== null
+      text: root.formatHover(root.hover)
+      color: root.lineColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+      anchors.centerIn: parent
     }
   }
 }

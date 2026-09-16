@@ -65,6 +65,19 @@ Panel {
     if (!isFinite(n)) n = 14
     return Util.clamp(n, 1, 365)
   }
+  // Invalid hex makes Qt warn and paint nothing predictable, so only
+  // #RGB / #RRGGBB / #AARRGGBB reach the sparkline; anything else is black.
+  readonly property color chartHoverLabelColor: {
+    var s = String(setting("chartHoverLabelColor", "#000000") || "").trim()
+    if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(s))
+      return s
+    return "#000000"
+  }
+  readonly property real chartHoverLabelOpacity: {
+    var n = Math.round(Number(setting("chartHoverLabelOpacity", 50)))
+    if (!isFinite(n)) n = 50
+    return Util.clamp(n, 0, 100) / 100
+  }
 
   // ---------------------------------------------------------------- now
 
@@ -1382,6 +1395,8 @@ Panel {
               crosshairColor: root.accent
               dim: root.dim
               fontFamily: root.fontFamily
+              hoverLabelColor: root.chartHoverLabelColor
+              hoverLabelOpacity: root.chartHoverLabelOpacity
             }
 
             PanelSeparator { foreground: root.foreground }
