@@ -38,6 +38,42 @@ Panel {
     }
   }
 
+  // The version on screen has to be the version that shipped, so it is read
+  // from the manifest the shell loaded this plugin from instead of copied
+  // into a literal that can drift a release behind. manifest.json sits next
+  // to this file: the repository root is the plugin root.
+  property string manifestName: ""
+  property string manifestVersion: ""
+  readonly property string versionLine: manifestVersion === ""
+    ? ""
+    : (manifestName === "" ? "Energy Meter" : manifestName) + " " + manifestVersion
+
+  function readManifest() {
+    var raw = ""
+    try { raw = String(manifestFile.text() || "") } catch (e) { raw = "" }
+    if (raw === "") return
+    try {
+      var m = JSON.parse(raw)
+      root.manifestName = String(m.name || "")
+      root.manifestVersion = String(m.version || "")
+    } catch (e) {
+      // An unreadable manifest hides the line rather than showing a guess:
+      // a wrong version on screen is worse than no version.
+      root.manifestName = ""
+      root.manifestVersion = ""
+    }
+  }
+
+  FileView {
+    id: manifestFile
+    path: Qt.resolvedUrl("manifest.json").toString().replace(/^file:\/\//, "")
+    blockLoading: true
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.readManifest()
+    onLoadFailed: root.readManifest()
+  }
+
   readonly property string cli: (Quickshell.env("HOME") || "") + "/.local/bin/omaenergy"
   readonly property string iconBolt: "\uF0E7"
   readonly property string iconCog: "\uF013"
@@ -1478,6 +1514,16 @@ Panel {
                 font.pixelSize: Style.font.caption
                 font.bold: true
                 font.letterSpacing: 1.2
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                visible: root.versionLine !== ""
+                text: root.versionLine
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
