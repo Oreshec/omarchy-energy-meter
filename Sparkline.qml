@@ -20,15 +20,9 @@ Item {
   // A peak is one sample tall. At 1.75 px the stroke was wider than the
   // feature it was drawing, so a spike read as a bulge in a thick band.
   property real strokeWidth: 1
-  // Dots are informative when a point is a day and noise when a point is
-  // five minutes: 289 dots at r=2.5 across a panel merge into a band about
-  // as tall as the spikes. They are drawn when the points are far enough
-  // apart to read as points, or when there are few enough of them that the
-  // series is the dots -- four days inside a year window land in a few
-  // pixels, and suppressing those leaves the plot empty.
-  property real dotRadius: 2
-  property real dotMinSpacing: 6
-  property int dotAlwaysMaxPoints: 64
+  // No marker per point: the trace is the line. A dot per sample was wider
+  // than the spike it sat on, which is what made peaks unreadable at dense
+  // spans, and a dot per day is decoration the line already carries.
 
   readonly property int pad: Math.max(4, Style.space(6))
   readonly property int count: Array.isArray(points) ? points.length : 0
@@ -173,8 +167,7 @@ Item {
       ctx.lineTo(width - root.pad, height - root.pad)
       ctx.stroke()
 
-      var xSpan = coords.length > 1 ? (coords[coords.length - 1].x - coords[0].x) : 0
-      if (coords.length > 1 && xSpan > 8) {
+      if (coords.length > 1) {
         ctx.beginPath()
         ctx.moveTo(coords[0].x, height - root.pad)
         for (var f = 0; f < coords.length; f++) ctx.lineTo(coords[f].x, coords[f].y)
@@ -191,16 +184,19 @@ Item {
         ctx.lineJoin = "round"
         ctx.lineCap = "round"
         ctx.stroke()
-      }
-
-      var spacing = coords.length > 1 ? (xSpan / (coords.length - 1)) : Infinity
-      if (spacing >= root.dotMinSpacing || coords.length <= root.dotAlwaysMaxPoints) {
-        ctx.fillStyle = root.css(root.lineColor, 1)
-        for (var d = 0; d < coords.length; d++) {
-          ctx.beginPath()
-          ctx.arc(coords[d].x, coords[d].y, root.dotRadius, 0, Math.PI * 2)
-          ctx.fill()
-        }
+      } else {
+        // One point is one reading, and with no per-point marker it would
+        // otherwise paint an empty plot that reads as "broken" rather than
+        // as "a single sample so far". A short level segment says the same
+        // thing in the same visual language as the rest of the chart.
+        var only = coords[0]
+        ctx.beginPath()
+        ctx.moveTo(Math.max(root.pad, only.x - 6), only.y)
+        ctx.lineTo(Math.min(width - root.pad, only.x + 6), only.y)
+        ctx.strokeStyle = root.css(root.lineColor, 1)
+        ctx.lineWidth = root.strokeWidth
+        ctx.lineCap = "round"
+        ctx.stroke()
       }
     }
   }
