@@ -5,7 +5,7 @@ import qs.Commons
 import qs.Ui
 
 // Energy: live at-socket watts on the bar, and a panel of consumption
-// broken down by day / week / month / year. All figures come from the
+// broken down by day / week / month / year / custom. All figures come from the
 // `omaenergy` CLI; this file never reads sysfs or UPower.
 //
 // Values that originated outside the plugin (CLI labels, formatted
@@ -59,6 +59,11 @@ Panel {
     var m = String(setting("barLabelMode", "watts") || "watts")
     if (m === "todayKwh" || m === "monthKwh") return m
     return "watts"
+  }
+  readonly property int chartCustomDays: {
+    var n = Math.round(Number(setting("chartCustomDays", 14)))
+    if (!isFinite(n)) n = 14
+    return Util.clamp(n, 1, 365)
   }
 
   // ---------------------------------------------------------------- now
@@ -156,11 +161,18 @@ Panel {
   // ---------------------------------------------------------- breakdown
 
   property string granularity: "day"
-  property var bucketsCache: ({ day: [], week: [], month: [], year: [] })
+  property var bucketsCache: ({ day: [], week: [], month: [], year: [], custom: [] })
   property string bucketsInflight: ""
   property bool pendingBuckets: false
   property var chartPoints: []
   property bool pendingChart: false
+  // Hours the in-flight `chart` process was started for. A filter
+  // change cannot rewrite a running command, so pollChart only sets
+  // pendingChart; applyChart then ignores a reply whose window is no
+  // longer selected, and onExited re-runs pollChart which reads the
+  // current filter -- same idea as bucketsInflight.
+  property real chartInflightHours: 0
+  property bool customDaysFocused: false
 
   readonly property var visibleBuckets: {
     var cache = bucketsCache || ({})
@@ -181,8 +193,37 @@ Panel {
     { value: "day", label: "Day" },
     { value: "week", label: "Week" },
     { value: "month", label: "Month" },
-    { value: "year", label: "Year" }
+    { value: "year", label: "Year" },
+    { value: "custom", label: "Custom" }
   ]
+
+  readonly property real chartHours: {
+    if (granularity === "week") return 168
+    if (granularity === "month") return 720
+    if (granularity === "year") return 8760
+    if (granularity === "custom") return chartCustomDays * 24
+    return 24
+  }
+
+  readonly property string chartEmptyText: {
+    if (granularity === "week") return "No samples in the last 7 days yet"
+    if (granularity === "month") return "No samples in the last 30 days yet"
+    if (granularity === "year") return "No samples in the last year yet"
+    if (granularity === "custom") {
+      var n = chartCustomDays
+      return "No samples in the last " + n + (n === 1 ? " day yet" : " days yet")
+    }
+    return "No samples in the last 24h yet"
+  }
+
+  readonly property string chartSectionTitle: {
+    if (granularity === "week") return "LAST 7 DAYS"
+    if (granularity === "month") return "LAST 30 DAYS"
+    if (granularity === "year") return "LAST YEAR"
+    if (granularity === "custom")
+      return "LAST " + chartCustomDays + (chartCustomDays === 1 ? " DAY" : " DAYS")
+    return "LAST 24H"
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -305,7 +346,7 @@ Panel {
 
   function formatBucketLabel(period, label) {
     var raw = String(label || "")
-    if (period === "day") {
+    if (period === "day" || period === "custom") {
       if (raw === todayDate()) return "Today"
       var parsed = new Date(raw + "T00:00:00")
       if (isNaN(parsed.getTime())) return raw
@@ -433,6 +474,17 @@ Panel {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
+  function commitCustomDays(text) {
+    var n = Math.round(Number(text))
+    if (!isFinite(n)) n = chartCustomDays
+    n = Util.clamp(n, 1, 365)
+    if (n !== chartCustomDays) {
+      persistSettings({ chartCustomDays: n })
+      refreshPanelData()
+    }
+    return n
+  }
+
   function cycleBarLabel() {
     var next = "watts"
     if (barLabelMode === "watts") next = "todayKwh"
@@ -441,13 +493,13 @@ Panel {
   }
 
   function cycleGranularity(dx) {
-    var order = ["day", "week", "month", "year"]
+    var order = ["day", "week", "month", "year", "custom"]
     var i = order.indexOf(granularity)
     if (i < 0) i = 0
     var next = order[(i + dx + order.length) % order.length]
     if (next === granularity) return
     granularity = next
-    pollBuckets()
+    refreshPanelData()
   }
   function configLoadedText(key) {
     if (!configValues || configValues[key] === undefined || configValues[key] === null)
@@ -728,12 +780,18 @@ Panel {
     nowProc.running = true
   }
 
+  function chartArgv() {
+    return [cli, "chart", "--json", "--hours", String(chartHours)]
+  }
+
   function pollChart() {
     if (!root.opened) return
     if (chartProc.running) {
       pendingChart = true
       return
     }
+    chartInflightHours = chartHours
+    chartProc.command = chartArgv()
     chartProc.running = true
   }
 
@@ -741,6 +799,7 @@ Panel {
     if (granularity === "week") return [cli, "week", "--json", "-n", "6"]
     if (granularity === "month") return [cli, "month", "--json", "-n", "6"]
     if (granularity === "year") return [cli, "year", "--json", "-n", "0"]
+    if (granularity === "custom") return [cli, "day", "--json", "-n", String(chartCustomDays)]
     return [cli, "day", "--json", "-n", "7"]
   }
 
@@ -816,6 +875,7 @@ Panel {
   }
 
   function applyChart(text) {
+    if (Number(chartInflightHours) !== Number(chartHours)) return
     var data = parseJsonObject(text)
     if (!data || data.status !== "ok" || !Array.isArray(data.points))
       return
@@ -856,7 +916,8 @@ Panel {
       day: period === "day" ? rows : (bucketsCache.day || []),
       week: period === "week" ? rows : (bucketsCache.week || []),
       month: period === "month" ? rows : (bucketsCache.month || []),
-      year: period === "year" ? rows : (bucketsCache.year || [])
+      year: period === "year" ? rows : (bucketsCache.year || []),
+      custom: period === "custom" ? rows : (bucketsCache.custom || [])
     }
   }
 
@@ -922,15 +983,17 @@ Panel {
 
   Process {
     id: chartProc
-    command: [root.cli, "chart", "--json", "--hours", "24"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyChart(text)
     }
     onExited: function(code) {
       if (code !== 0) {
-        root.chartPoints = []
+        if (root.chartInflightHours === root.chartHours)
+          root.chartPoints = []
+        var retry = root.pendingChart && root.chartInflightHours !== root.chartHours
         root.pendingChart = false
+        if (retry && root.opened) Qt.callLater(root.pollChart)
         return
       }
       if (root.pendingChart) {
@@ -1048,7 +1111,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.configFieldFocused || root.currencyPopupOpen
+      blocked: root.configFieldFocused || root.currencyPopupOpen || root.customDaysFocused
       onMoveRequested: function(dx, dy) {
         if (root.configOpen) {
           if (dy !== 0 && panelFlick)
@@ -1240,21 +1303,10 @@ Panel {
 
             PanelSectionHeader {
               width: parent.width
-              text: "LAST 24H"
+              text: root.chartSectionTitle
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
-
-            Sparkline {
-              width: parent.width
-              points: root.chartPoints
-              lineColor: root.foreground
-              crosshairColor: root.accent
-              dim: root.dim
-              fontFamily: root.fontFamily
-            }
-
-            PanelSeparator { foreground: root.foreground }
 
             ButtonGroup {
               width: parent.width
@@ -1267,9 +1319,67 @@ Panel {
               onChanged: function(v) {
                 if (v === root.granularity) return
                 root.granularity = v
-                root.pollBuckets()
+                root.refreshPanelData()
               }
             }
+
+            Row {
+              visible: root.granularity === "custom"
+              spacing: Style.space(8)
+              width: parent.width
+
+              Text {
+                textFormat: Text.PlainText
+                text: "Days"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              TextField {
+                id: customDaysField
+                width: Style.space(72)
+                placeholderText: "14"
+                foreground: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                verticalPadding: Style.space(2)
+                inputMethodHints: Qt.ImhDigitsOnly
+                property int days: root.chartCustomDays
+                onDaysChanged: if (!activeFocus) text = String(days)
+                onVisibleChanged: {
+                  if (visible) {
+                    if (!activeFocus) text = String(root.chartCustomDays)
+                  } else {
+                    root.customDaysFocused = false
+                  }
+                }
+                Component.onCompleted: text = String(root.chartCustomDays)
+                onActiveFocusChanged: root.customDaysFocused = activeFocus
+                onEditingFinished: text = String(root.commitCustomDays(text))
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    text = String(root.chartCustomDays)
+                    keyCatcher.forceActiveFocus()
+                    event.accepted = true
+                  }
+                }
+              }
+            }
+
+            Sparkline {
+              width: parent.width
+              points: root.chartPoints
+              spanSeconds: Math.round(root.chartHours * 3600)
+              emptyText: root.chartEmptyText
+              lineColor: root.foreground
+              crosshairColor: root.accent
+              dim: root.dim
+              fontFamily: root.fontFamily
+            }
+
+            PanelSeparator { foreground: root.foreground }
 
             Column {
               width: parent.width

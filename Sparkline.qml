@@ -1,12 +1,15 @@
 import QtQuick
 import qs.Commons
 
-// Last-24h power sparkline. Hover shows a crosshair and a watts/time readout.
+// Power sparkline over a caller-set span (default 24 h). Hover shows a
+// crosshair and a watts/time readout.
 // `points` is [{ts, w}, ...] with unix-seconds timestamps, oldest first.
 Item {
   id: root
 
   property var points: []
+  property int spanSeconds: 24 * 3600
+  property string emptyText: "No samples in this range yet"
   property color lineColor: Color.foreground
   property color fillColor: Qt.rgba(lineColor.r, lineColor.g, lineColor.b, 0.14)
   property color crosshairColor: Color.accent
@@ -51,7 +54,7 @@ Item {
     var list = Array.isArray(root.points) ? root.points : []
     if (list.length === 0) return { t0: 0, t1: 1 }
     var t1 = tsOf(list[list.length - 1])
-    var t0 = t1 - 24 * 3600
+    var t0 = t1 - root.spanSeconds
     var first = tsOf(list[0])
     if (first > 0 && first < t0) t0 = first
     if (!(t1 > t0)) t1 = t0 + 1
@@ -97,7 +100,10 @@ Item {
     if (isNaN(d.getTime())) return ""
     var hh = String(d.getHours()).padStart(2, "0")
     var mm = String(d.getMinutes()).padStart(2, "0")
-    return hh + ":" + mm
+    var clock = hh + ":" + mm
+    if (root.spanSeconds <= 48 * 3600) return clock
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return months[d.getMonth()] + " " + d.getDate() + " " + clock
   }
 
   function formatHover(h) {
@@ -106,6 +112,7 @@ Item {
   }
 
   onPointsChanged: plot.requestPaint()
+  onSpanSecondsChanged: plot.requestPaint()
   onLineColorChanged: plot.requestPaint()
   onFillColorChanged: plot.requestPaint()
   onMaxWChanged: plot.requestPaint()
@@ -116,7 +123,7 @@ Item {
     textFormat: Text.PlainText
     visible: root.count === 0
     anchors.centerIn: parent
-    text: "No 24h samples yet"
+    text: root.emptyText
     color: root.dim
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption

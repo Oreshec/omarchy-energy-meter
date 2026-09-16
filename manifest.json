@@ -13,14 +13,15 @@
   },
   "barWidget": {
     "displayName": "Energy Meter",
-    "description": "Live watts on the bar; click for a 24h sparkline and energy broken down by day, week, month, and year.",
+    "description": "Live watts on the bar; click for a sparkline that follows the selected period and energy broken down by day, week, month, year, or a custom number of days.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 5,
       "highWattThreshold": 300,
-      "barLabelMode": "watts"
+      "barLabelMode": "watts",
+      "chartCustomDays": 14
     },
     "schema": [
       {
@@ -50,6 +51,16 @@
         "options": ["watts", "todayKwh", "monthKwh"],
         "defaultValue": "watts",
         "description": "What the bar shows. Right-click the widget to cycle. watts = live draw, todayKwh = today's energy, monthKwh = month to date."
+      },
+      {
+        "key": "chartCustomDays",
+        "type": "integer",
+        "label": "Custom range (days)",
+        "description": "The span the graph and the breakdown use when the Custom filter is selected.",
+        "min": 1,
+        "max": 365,
+        "step": 1,
+        "defaultValue": 14
       }
     ]
   }

@@ -1406,32 +1406,63 @@ def cmd_breakdown(args: argparse.Namespace, cfg: dict) -> dict:
 
 
 def cmd_chart(args: argparse.Namespace, cfg: dict) -> dict:
-    dir_fd = state_dir_fd(create=False)
-    if dir_fd is None or not managed_exists(dir_fd, "energy.db"):
-        return {"status": "no_data", "step_s": 300, "points": []}
-    db = connect(read_only=True)
-    since = int((time.time() - args.hours * 3600) * 1000)
-    # Bucket raw samples so a 24 h window returns a drawable number of points
-    # rather than ~8600 of them.
-    step = max(60, int(args.hours * 3600 / 288))
-    rows = db.execute(
-        """SELECT (ts / 1000) / ? AS slot,
-                  SUM(cpu_uj + gpu_uj) AS uj,
-                  SUM(dt_ms) AS dt_ms
-           FROM samples WHERE ts >= ?
-           GROUP BY slot ORDER BY slot""", (step, since)).fetchall()
+    hours = float(args.hours)
+    # Raw sample rows are pruned at raw_retention_days, so a year of points
+    # does not exist in `samples` and must come from the daily rollup.
+    # Stay on raw samples while the requested window still fits that retention.
+    use_samples = hours <= int(cfg["raw_retention_days"]) * 24
+    source = "samples" if use_samples else "daily"
+    step = max(60, int(hours * 3600 / 288)) if use_samples else 86400
     points = []
-    for slot, uj, dt_ms in rows:
-        secs = max(dt_ms / 1000.0, 1e-6)
-        # Divided by the time actually sampled in the slot, not by `step`, so a
-        # partial leading or trailing slot reports the draw it saw instead of a
-        # spuriously low average.
-        points.append({
-            "ts": int(slot * step),
-            "w": round(total_socket_w(uj / secs / 1e6, 0.0, cfg), 1),
-            "tracked_s": round(secs, 1),
-        })
-    return {"status": "ok" if points else "no_data", "step_s": step, "points": points}
+
+    dir_fd = state_dir_fd(create=False)
+    if dir_fd is not None and managed_exists(dir_fd, "energy.db"):
+        db = connect(read_only=True)
+        if use_samples:
+            since = int((time.time() - hours * 3600) * 1000)
+            # Bucket raw samples so a 24 h window returns a drawable number of points
+            # rather than ~8600 of them.
+            rows = db.execute(
+                """SELECT (ts / 1000) / ? AS slot,
+                          SUM(cpu_uj + gpu_uj) AS uj,
+                          SUM(dt_ms) AS dt_ms
+                   FROM samples WHERE ts >= ?
+                   GROUP BY slot ORDER BY slot""", (step, since)).fetchall()
+            for slot, uj, dt_ms in rows:
+                secs = max(dt_ms / 1000.0, 1e-6)
+                # Divided by the time actually sampled in the slot, not by `step`, so a
+                # partial leading or trailing slot reports the draw it saw instead of a
+                # spuriously low average.
+                points.append({
+                    "ts": int(slot * step),
+                    "w": round(total_socket_w(uj / secs / 1e6, 0.0, cfg), 1),
+                    "tracked_s": round(secs, 1),
+                })
+        else:
+            since_day = (datetime.now().astimezone() - timedelta(hours=hours)).date().isoformat()
+            rows = db.execute(
+                "SELECT day, cpu_uj, gpu_uj, tracked_ms FROM daily "
+                "WHERE day >= ? ORDER BY day", (since_day,)).fetchall()
+            for day_str, cpu_uj, gpu_uj, tracked_ms in rows:
+                start = datetime.fromisoformat(day_str).astimezone()
+                tracked_hours = tracked_ms / 3600000.0
+                kwh = socket_kwh(cpu_uj, gpu_uj, tracked_ms, cfg)
+                # Average over the time actually tracked that day, not over 24 h,
+                # so a partial day reports the draw it saw.
+                w = round(kwh * 1000 / tracked_hours, 1) if tracked_hours > 0 else 0.0
+                points.append({
+                    "ts": int(start.timestamp()),
+                    "w": w,
+                    "tracked_s": round(tracked_ms / 1000.0, 1),
+                })
+
+    return {
+        "status": "ok" if points else "no_data",
+        "step_s": step,
+        "source": source,
+        "span_h": hours,
+        "points": points,
+    }
 
 
 # --------------------------------------------------------------------------

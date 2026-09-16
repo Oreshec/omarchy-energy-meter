@@ -9,7 +9,7 @@ integrates and keeps a permanent daily rollup, so you can answer "what did this
 computer actually cost me last month?"
 
 <p align="center">
-  <img src="preview.png" alt="The bar widget among its neighbours, the panel with the live draw and a 24h sparkline, and the settings pane" width="640">
+  <img src="preview.png" alt="The bar widget among its neighbours, the panel with the live draw and a graph that follows the selected period, and the settings pane" width="640">
 </p>
 
 It is built around one rule: **never present an estimate as a measurement.**
@@ -162,10 +162,15 @@ live one.
 | | |
 |---|---|
 | Hero | Current draw, with a CPU / GPU / rest stacked bar whose segments sum to the total within display rounding, and the share of the reading that is hardware-measured |
-| Sparkline | Last 24 hours, hover for a crosshair readout |
-| Breakdown | Day / week / month / year, each row with energy, cost, average while tracked, and largest sample |
+| Sparkline | Follows the selected period (Day, Week, Month, Year, or a Custom number of days). The filter sits above the graph; hover for a crosshair readout |
+| Breakdown | Same periods, each row with energy, cost, average while tracked, and largest sample |
 | Coverage | Any bucket that was not fully sampled is marked, so a day the machine was off for 18 hours never reads as a low-consumption day |
 | Settings | A gear in the top-right corner opens a config pane: price, currency, the estimate constants, and the sampling options, each with its units and what it does |
+
+The graph follows the same filter as the breakdown. For a window longer
+than `raw_retention_days` (default 30) it is drawn from the permanent daily
+rollup at one point per day rather than from raw samples: those rows are
+pruned at that age, so a year of interval points does not exist to plot.
 
 <p align="center">
   <img src="docs/settings.png" alt="The settings pane: price per kWh, a currency picker, a symbol override, and decimal places" width="380">
@@ -381,6 +386,7 @@ deliberately not used, sample counts, and how many intervals were dropped.
 | `refreshIntervalSec` | 5 | How often the bar polls the CLI. Does **not** change the sampling rate |
 | `highWattThreshold` | 300 | Urgent colour at or above this many watts |
 | `barLabelMode` | `watts` | `watts` / `todayKwh` / `monthKwh`. Right-click to cycle |
+| `chartCustomDays` | 14 | Days the graph and the breakdown span when the Custom filter is selected. 1-365 |
 
 **Backend**: one source of truth, `~/.config/omarchy-energy/config.json`.
 You never need to hand-edit it. Every key below is editable from the panel's
@@ -410,7 +416,7 @@ omaenergy config baseline_w=37.5            # after calibrating
 | `psu_efficiency` | 0.89 | AC→DC loss. Retroactive |
 | `interval_s` | 10 | Database row interval. Needs a service restart |
 | `gpu_interval_s` | 1.0 | GPU sub-sample rate: this is what sets GPU accuracy |
-| `raw_retention_days` | 30 | How long per-sample rows are kept for charts. The daily rollup is kept forever |
+| `raw_retention_days` | 30 | How long per-sample rows are kept for charts. A graph window longer than this is drawn from the daily rollup, one point per day. The rollup itself is kept forever |
 | `sanity_max_cpu_w` | 1000 | Package draw above this is treated as a counter reset and dropped |
 | `gpu_source` | `auto` | `auto`, `off`, or an explicit hwmon path |
 
@@ -491,7 +497,9 @@ so for the service the write target is confined regardless; the CLI invoked
 from the widget is not sandboxed.
 
 Two tables. `samples` is one row per interval of raw measured µJ, pruned after
-`raw_retention_days`, and exists only to draw charts. `daily` is one row per
+`raw_retention_days`, and exists only to draw charts. The graph uses those
+rows while the requested window fits inside that retention, and the daily
+rollup once it does not, because the raw rows are gone. `daily` is one row per
 local day, cumulative, and **kept forever**: week, month and year are
 aggregated from it, so a year of history is 365 rows.
 

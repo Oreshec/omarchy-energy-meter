@@ -12,6 +12,30 @@ stable default branch is the only way to keep unreleased work out of your
 install. `manifest.json`'s `version` is a display string with no effect of its
 own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
 
+## Unreleased
+
+**Added**
+
+- A Custom period on the panel, whose span is the new `chartCustomDays`
+  widget setting (1-365 days, default 14). Day, Week, Month, and Year were
+  already there; Custom is the one whose length is yours rather than a
+  calendar bucket.
+
+**Changed**
+
+- The panel graph follows the selected period instead of always drawing the
+  last 24 hours. The filter used to drive only the bucket list underneath
+  the sparkline, so switching to Month still showed a day of watts. The
+  filter row now sits above the graph, because that is the control that
+  decides what both of them show.
+
+- Windows longer than `raw_retention_days` (default 30) are drawn from the
+  permanent daily rollup, one point per day, rather than from raw samples.
+  Raw rows are pruned at that age, so a year of interval points does not
+  exist to plot. The rollup is what the week/month/year buckets already
+  use; the graph now uses it too when the requested window is older than
+  the samples table can still hold.
+
 ## 1.2.5
 
 **Fixed**
@@ -54,6 +78,7 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   performs the old open/close against a live `-shm` on purpose and fails the
   run if the locks *survive*, because a lock check that cannot observe a lock
   must not report a pass.
+
 
 ## 1.2.4
 
