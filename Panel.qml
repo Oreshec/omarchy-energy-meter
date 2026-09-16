@@ -1479,44 +1479,61 @@ Panel {
             width: parent.width
             spacing: Style.space(10)
 
-            Row {
-              spacing: Style.space(8)
+            // The back arrow and the title are one left-hand group; the
+            // version sits against the right edge, where it reads as a
+            // footnote about the pane rather than part of its title. A Row
+            // cannot express that -- it packs every child against the left --
+            // so the header is an Item the two groups anchor inside.
+            Item {
+              width: parent.width
+              height: settingsHeaderRow.height
 
-              Item {
-                width: Style.space(22)
-                height: Style.space(22)
+              Row {
+                id: settingsHeaderRow
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(8)
+
+                Item {
+                  width: Style.space(22)
+                  height: Style.space(22)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.centerIn: parent
+                    text: root.iconBack
+                    color: root.foreground
+                    opacity: backHover.containsMouse ? 0.95 : 0.5
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  MouseArea {
+                    id: backHover
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.closeConfig()
+                  }
+                }
 
                 Text {
                   textFormat: Text.PlainText
-                  anchors.centerIn: parent
-                  text: root.iconBack
-                  color: root.foreground
-                  opacity: backHover.containsMouse ? 0.95 : 0.5
+                  text: "SETTINGS"
+                  color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-
-                MouseArea {
-                  id: backHover
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.closeConfig()
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  font.letterSpacing: 1.2
+                  anchors.verticalCenter: parent.verticalCenter
                 }
               }
 
-              Text {
-                textFormat: Text.PlainText
-                text: "SETTINGS"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 1.2
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
+              // Anchored to both edges rather than to the right alone, so a
+              // long plugin name elides into the gap instead of sliding under
+              // the title. The panel is a fixed width but the name and version
+              // come from a manifest this file does not control.
               Text {
                 textFormat: Text.PlainText
                 visible: root.versionLine !== ""
@@ -1524,6 +1541,11 @@ Panel {
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideRight
+                anchors.left: settingsHeaderRow.right
+                anchors.leftMargin: Style.space(8)
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
