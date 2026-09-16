@@ -15,6 +15,18 @@ Item {
   property color crosshairColor: Color.accent
   property color dim: Qt.darker(lineColor, 1.55)
   property string fontFamily: Style.font.family
+  // A peak is one sample tall. At 1.75 px the stroke was wider than the
+  // feature it was drawing, so a spike read as a bulge in a thick band.
+  property real strokeWidth: 1
+  // Dots are informative when a point is a day and noise when a point is
+  // five minutes: 289 dots at r=2.5 across a panel merge into a band about
+  // as tall as the spikes. They are drawn when the points are far enough
+  // apart to read as points, or when there are few enough of them that the
+  // series is the dots -- four days inside a year window land in a few
+  // pixels, and suppressing those leaves the plot empty.
+  property real dotRadius: 2
+  property real dotMinSpacing: 6
+  property int dotAlwaysMaxPoints: 64
 
   readonly property int pad: Math.max(4, Style.space(6))
   readonly property int count: Array.isArray(points) ? points.length : 0
@@ -169,17 +181,20 @@ Item {
         ctx.moveTo(coords[0].x, coords[0].y)
         for (var s = 1; s < coords.length; s++) ctx.lineTo(coords[s].x, coords[s].y)
         ctx.strokeStyle = root.css(root.lineColor, 1)
-        ctx.lineWidth = 1.75
+        ctx.lineWidth = root.strokeWidth
         ctx.lineJoin = "round"
         ctx.lineCap = "round"
         ctx.stroke()
       }
 
-      ctx.fillStyle = root.css(root.lineColor, 1)
-      for (var d = 0; d < coords.length; d++) {
-        ctx.beginPath()
-        ctx.arc(coords[d].x, coords[d].y, 2.5, 0, Math.PI * 2)
-        ctx.fill()
+      var spacing = coords.length > 1 ? (xSpan / (coords.length - 1)) : Infinity
+      if (spacing >= root.dotMinSpacing || coords.length <= root.dotAlwaysMaxPoints) {
+        ctx.fillStyle = root.css(root.lineColor, 1)
+        for (var d = 0; d < coords.length; d++) {
+          ctx.beginPath()
+          ctx.arc(coords[d].x, coords[d].y, root.dotRadius, 0, Math.PI * 2)
+          ctx.fill()
+        }
       }
     }
   }

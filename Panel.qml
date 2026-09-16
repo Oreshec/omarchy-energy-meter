@@ -475,8 +475,13 @@ Panel {
   }
 
   function commitCustomDays(text) {
-    var n = Math.round(Number(text))
-    if (!isFinite(n)) n = chartCustomDays
+    // Number("") is 0, not NaN, so an empty or non-numeric field used to
+    // survive the isFinite guard, clamp to 1, and persist a day count the
+    // user never typed -- opening the panel was enough to write it. An
+    // unusable value leaves the setting alone instead.
+    var raw = String(text === undefined || text === null ? "" : text).trim()
+    var n = Math.round(Number(raw))
+    if (raw === "" || !isFinite(n) || n <= 0) return chartCustomDays
     n = Util.clamp(n, 1, 365)
     if (n !== chartCustomDays) {
       persistSettings({ chartCustomDays: n })
