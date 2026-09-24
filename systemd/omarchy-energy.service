@@ -3,7 +3,7 @@
 # no root is needed at runtime.
 
 [Unit]
-Description=Omarchy energy meter (RAPL + amdgpu sampler)
+Description=Omarchy energy meter (RAPL + GPU sampler)
 # The local path used during development does not exist after a plugin install,
 # so point at the documentation that always does.
 Documentation=https://github.com/kevzakaria/omarchy-energy-meter
@@ -21,13 +21,14 @@ RestartSec=5
 KillSignal=SIGTERM
 TimeoutStopSec=15
 
-# Sampling is two RAPL sysfs reads plus ten GPU hwmon reads per interval,
-# then one SQLite write. Keep it out of the way of anything that matters.
+# Sampling is two RAPL sysfs reads plus ten GPU reads per interval
+# (amdgpu hwmon or NVML), then one SQLite write. Keep it out of the way of
+# anything that matters.
 Nice=10
 IOSchedulingClass=idle
 CPUSchedulingPolicy=idle
 
-# It reads two RAPL sysfs attributes and ten GPU hwmon attributes per
+# It reads two RAPL sysfs attributes and ten GPU attributes per
 # interval, and writes one SQLite file. Nothing else.
 NoNewPrivileges=true
 PrivateTmp=true

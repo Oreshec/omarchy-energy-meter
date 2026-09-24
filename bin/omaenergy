@@ -11,11 +11,12 @@ Two terms are read from hardware:
             sample interval. On AMD this is MSR C001_029B, the whole socket:
             core complexes plus the I/O die. It does NOT include DIMMs, the
             discrete GPU, or the chipset.
-  GPU       amdgpu hwmon `power1_average` (or `power1_input` where that is the
-            only one exposed). This is *not* an energy counter: it is a
-            firmware-filtered power estimate, reported in whole watts, which
-            must be integrated by sampling. Its integral is therefore
-            approximate; see GPU SAMPLING below.
+  GPU       AMD: amdgpu hwmon `power1_average` (or `power1_input` where that is
+            the only one exposed). NVIDIA: NVML `nvmlDeviceGetPowerUsage` loaded
+            through ctypes, with no extra dependency. Either way this is *not*
+            an energy counter: it is a firmware-filtered power estimate,
+            reported in whole watts, which must be integrated by sampling. Its
+            integral is therefore approximate; see GPU SAMPLING below.
 
 Everything else in the box -- DRAM, NVMe, SATA, fans, chipset, USB -- has no
 power sensor on a typical desktop board, and the PSU's AC/DC conversion loss is
@@ -54,13 +55,14 @@ interval is exact regardless of spacing.
 
 SCOPE
 -----
-Supported and verified: AMD or Intel CPUs exposing RAPL `package-*`, plus an
-optional discrete AMD GPU. Detected but deliberately unused: the Intel `psys`
-and `dram` zones (see `omaenergy status`). Using `psys` would be strictly
-better than package-plus-estimate, and `dram` would shrink the estimated
-remainder, but neither could be verified on real hardware here, and this tool
-would rather report a source as unused than integrate a number whose semantics
-it has not checked.
+Supported and verified: AMD or Intel CPUs exposing RAPL `package-*`, plus a
+discrete AMD GPU (amdgpu hwmon) or a discrete NVIDIA GPU (NVML, proprietary
+driver). Detected but deliberately unused: the Intel `psys` and `dram` zones
+(see `omaenergy status`). Using `psys` would be strictly better than
+package-plus-estimate, and `dram` would shrink the estimated remainder, but
+neither could be verified on real hardware here, and this tool would rather
+report a source as unused than integrate a number whose semantics it has not
+checked.
 
 On an AMD APU the integrated GPU is already inside the RAPL package figure, and
 amdgpu's `power1_average` on an APU is documented to include the CPU. Adding
@@ -71,6 +73,7 @@ dropped and the reason is reported.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import errno
 import json
 import os
@@ -524,8 +527,10 @@ def defaults() -> dict:
         # about 6.5 kW over a 10 s interval on this hardware. Any interval
         # implying more package power than this is discarded as a reset.
         "sanity_max_cpu_w": 1000.0,
-        # "auto" | "off" | an explicit hwmon path. "off" is the honest setting
-        # for a machine whose GPU power this tool cannot read.
+        # "auto" | "off" | "nvidia" | an explicit amdgpu hwmon path. "off" is
+        # the honest setting for a machine whose GPU power this tool cannot
+        # read. "nvidia" forces the NVML backend. "auto" tries amdgpu first,
+        # then NVIDIA NVML.
         "gpu_source": "auto",
     }
 
@@ -625,7 +630,7 @@ SETTABLE = {
     "sanity_max_cpu_w":   (lambda v: _num(v, 50.0, 1e6), False,
                            "package draw above this is a counter reset"),
     "gpu_source":         (lambda v: str(v).strip() or "auto", False,
-                           "auto | off | an explicit hwmon path"),
+                           "auto | off | nvidia | an amdgpu hwmon path"),
 }
 
 
@@ -804,27 +809,67 @@ class RaplSensor:
 
 
 class GpuSensor:
-    """An amdgpu power reading, chosen deterministically.
+    """Amdgpu hwmon or NVIDIA NVML power reading, chosen deterministically.
 
-    Selection is by the highest `power1_cap`, never by hwmon index: hwmonN
+    AMD selection is by the highest `power1_cap`, never by hwmon index: hwmonN
     numbering follows driver probe order, it changes between boots, and it sorts
     lexicographically so "hwmon10" precedes "hwmon2". On a machine with an
     integrated and a discrete GPU, index order would happily pick the 15 W iGPU
-    and silently ignore a 300 W card.
+    and silently ignore a 300 W card. The NVML backend mirrors that rule across
+    NVIDIA cards, taking the one with the highest enforced power limit.
+
+    `gpu_source` is "auto" (amdgpu first, then NVML), "off", "nvidia" (NVML
+    only), or an explicit amdgpu hwmon path.
     """
 
     def __init__(self, cfg: dict) -> None:
-        self.path: Path | None = None
+        self.kind = ""                 # "amdgpu" | "nvidia"
+        self.path: Path | None = None  # amdgpu sysfs file
+        self.descriptor = ""
         self.label = ""
         self.cap_w = 0.0
         self.skipped_reason = ""
         self.candidates: list[dict] = []
+        self._nvml = None
+        self._nvml_handle = 0
 
         mode = str(cfg.get("gpu_source", "auto"))
         if mode == "off":
             self.skipped_reason = "disabled by config (gpu_source: off)"
             return
 
+        amd = self._amd_candidates()
+
+        if mode not in ("auto", "off", "nvidia"):
+            # An explicit amdgpu hwmon path.
+            chosen = next((c for c in amd if c["hwmon"] == mode
+                           or c["hwmon"] + "/" + c["attr"] == mode), None)
+            if chosen is None:
+                self.skipped_reason = f"configured gpu_source not found: {mode}"
+                return
+            self._select_amd(chosen)
+            return
+
+        if mode == "auto" and amd and not (cpu_has_integrated_gpu() and len(amd) == 1):
+            self._select_amd(max(amd, key=lambda c: c["cap_w"]))
+            return
+
+        # mode == "nvidia", or "auto" with no usable amdgpu sensor: use NVML.
+        if self._open_nvidia():
+            return
+
+        if mode == "auto" and amd:
+            # The only amdgpu sensor is the APU's iGPU, already inside the RAPL
+            # package figure, and no NVIDIA card could take its place.
+            self.skipped_reason = (
+                "integrated GPU on an AMD APU: already included in the RAPL "
+                "package figure, so counting it again would double count")
+            return
+        self.skipped_reason = (
+            "no amdgpu power sensor found, and no NVIDIA GPU via NVML"
+            if mode == "auto" else "no NVIDIA GPU via NVML")
+
+    def _amd_candidates(self) -> list[dict]:
         for hwmon in sorted(HWMON_ROOT.glob("hwmon*")):
             try:
                 if hwmon.joinpath("name").read_text().strip() != "amdgpu":
@@ -838,37 +883,105 @@ class GpuSensor:
             if attr is None:
                 continue
             cap = self._number(hwmon / "power1_cap")
-            self.candidates.append({
+            candid = {
                 "hwmon": str(hwmon),
                 "attr": attr,
                 "label": self._text(hwmon / "power1_label"),
                 "cap_w": round(cap / 1e6, 1) if cap else 0.0,
-            })
+            }
+            self.candidates.append(candid)
+        return self.candidates
 
-        if mode not in ("auto", "off"):
-            chosen = next((c for c in self.candidates if c["hwmon"] == mode
-                           or c["hwmon"] + "/" + c["attr"] == mode), None)
-            if chosen is None:
-                self.skipped_reason = f"configured gpu_source not found: {mode}"
-                return
-        elif not self.candidates:
-            self.skipped_reason = "no amdgpu power sensor found"
-            return
-        else:
-            chosen = max(self.candidates, key=lambda c: c["cap_w"])
-            if cpu_has_integrated_gpu() and len(self.candidates) == 1:
-                # The only GPU is the one inside the CPU package, so RAPL
-                # already counted it, and amdgpu's own reading on an APU
-                # includes the CPU as well. Counting it would double the
-                # machine.
-                self.skipped_reason = (
-                    "integrated GPU on an AMD APU: already included in the RAPL "
-                    "package figure, so counting it again would double count")
-                return
-
+    def _select_amd(self, chosen: dict) -> None:
+        self.kind = "amdgpu"
         self.path = Path(chosen["hwmon"]) / chosen["attr"]
+        self.descriptor = str(self.path)
         self.label = chosen["label"]
         self.cap_w = chosen["cap_w"]
+
+    def _open_nvidia(self) -> bool:
+        """Probe the NVIDIA Management Library through ctypes -- it ships with
+        the proprietary driver, so there is no Python dependency to add. Picks
+        the card with the highest enforced power limit and leaves NVML
+        initialised for `watts()`."""
+        try:
+            lib = ctypes.CDLL("libnvidia-ml.so.1")
+        except OSError:
+            return False
+
+        def bind(symbol):
+            fn = getattr(lib, symbol, None)
+            if fn is None:
+                return None
+            fn.restype = ctypes.c_uint
+            return fn
+
+        init = bind("nvmlInit_v2")
+        count = bind("nvmlDeviceGetCount_v2")
+        handle = bind("nvmlDeviceGetHandleByIndex_v2")
+        name = bind("nvmlDeviceGetName")
+        limit = bind("nvmlDeviceGetEnforcedPowerLimit")
+        power = bind("nvmlDeviceGetPowerUsage")
+        if not (init and count and handle and name and power):
+            return False  # too old a driver: treat as no NVML
+        handle.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+        name.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+        if limit is not None:
+            limit.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        power.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+
+        try:
+            if init() != 0:
+                return False
+            n = ctypes.c_uint()
+            if count(ctypes.byref(n)) != 0 or n.value == 0:
+                lib.nvmlShutdown()
+                return False
+        except OSError:
+            return False
+
+        cards = []
+        for i in range(n.value):
+            h = ctypes.c_void_p()
+            try:
+                if handle(i, ctypes.byref(h)) != 0:
+                    continue
+            except OSError:
+                continue
+            nm = ctypes.create_string_buffer(256)
+            name(h, nm, 256)
+            cap_w = 0.0
+            if limit is not None:
+                lim = ctypes.c_uint()
+                try:
+                    if limit(h, ctypes.byref(lim)) == 0:
+                        cap_w = round(lim.value / 1000.0, 1)
+                except OSError:
+                    pass
+            candid = {
+                "hwmon": f"nvml:{i}",
+                "attr": "power_mw",
+                "label": nm.value.decode("utf-8", "replace"),
+                "cap_w": cap_w,
+            }
+            cards.append(candid)
+            self.candidates.append(candid)
+
+        if not cards:
+            lib.nvmlShutdown()
+            return False
+        chosen = max(cards, key=lambda c: c["cap_w"])
+        h = ctypes.c_void_p()
+        if handle(int(chosen["hwmon"].split(":")[1]), ctypes.byref(h)) != 0:
+            lib.nvmlShutdown()
+            return False
+        self.kind = "nvidia"
+        self._nvml = lib
+        self._nvml_handle = int(h.value or 0)
+        self.descriptor = chosen["hwmon"]
+        self.label = chosen["label"]
+        self.cap_w = chosen["cap_w"]
+        return True
 
     @staticmethod
     def _readable(path: Path) -> bool:
@@ -894,9 +1007,19 @@ class GpuSensor:
 
     @property
     def available(self) -> bool:
-        return self.path is not None
+        return self.kind != ""
 
     def watts(self) -> float:
+        if self.kind == "nvidia":
+            if not self._nvml or not self._nvml_handle:
+                return 0.0
+            mw = ctypes.c_uint()
+            try:
+                rc = self._nvml.nvmlDeviceGetPowerUsage(self._nvml_handle,
+                                                        ctypes.byref(mw))
+            except OSError:
+                return 0.0
+            return mw.value / 1000.0 if rc == 0 else 0.0
         if self.path is None:
             return 0.0
         try:
@@ -910,7 +1033,8 @@ def describe_sources(cfg: dict) -> dict:
     return {
         "cpu_zones": [str(p) for p, _ in rapl.zones],
         "cpu_available": rapl.available,
-        "gpu_sensor": str(gpu.path) if gpu.available else None,
+        "gpu_kind": gpu.kind or None,
+        "gpu_sensor": gpu.descriptor or None,
         "gpu_label": gpu.label or None,
         "gpu_cap_w": gpu.cap_w or None,
         "gpu_candidates": gpu.candidates,
@@ -1067,7 +1191,7 @@ def run_daemon(args: argparse.Namespace) -> int:
               "Refusing to record samples with no CPU energy.", file=sys.stderr)
         return 1
     if gpu.available:
-        print(f"omaenergy: GPU source {gpu.path} (label {gpu.label or '?'}, "
+        print(f"omaenergy: GPU source {gpu.descriptor} (label {gpu.label or '?'}, "
               f"cap {gpu.cap_w or '?'} W)", file=sys.stderr)
     else:
         print(f"omaenergy: no GPU term: {gpu.skipped_reason}. GPU draw will "
@@ -1080,7 +1204,7 @@ def run_daemon(args: argparse.Namespace) -> int:
     meta_set(db, "interval_s", interval)          # the EFFECTIVE interval, so
     meta_set(db, "gpu_interval_s", gpu_interval)  # readers judge staleness
     meta_set(db, "daemon_started_ms", int(time.time() * 1000))
-    meta_set(db, "gpu_source", str(gpu.path) if gpu.available else "")
+    meta_set(db, "gpu_source", gpu.descriptor if gpu.available else "")
     meta_set(db, "gpu_skipped", gpu.skipped_reason)
     db.commit()
     # `db` is open, so the database inodes are off limits here; connect()
