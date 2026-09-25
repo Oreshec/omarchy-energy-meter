@@ -832,6 +832,7 @@ class GpuSensor:
         self.candidates: list[dict] = []
         self._nvml = None
         self._nvml_handle = 0
+        self._dead = False
 
         mode = str(cfg.get("gpu_source", "auto"))
         if mode == "off":
@@ -1007,7 +1008,7 @@ class GpuSensor:
 
     @property
     def available(self) -> bool:
-        return self.kind != ""
+        return self.kind != "" and not self._dead
 
     def watts(self) -> float:
         if self.kind == "nvidia":
@@ -1018,6 +1019,12 @@ class GpuSensor:
                 rc = self._nvml.nvmlDeviceGetPowerUsage(self._nvml_handle,
                                                         ctypes.byref(mw))
             except OSError:
+                self._dead = True
+                return 0.0
+            if rc != 0:
+                # A failed NVML call usually means the handle went stale in a
+                # driver reload; mark the source dead so the daemon re-probes.
+                self._dead = True
                 return 0.0
             return mw.value / 1000.0 if rc == 0 else 0.0
         if self.path is None:
@@ -1215,8 +1222,30 @@ def run_daemon(args: argparse.Namespace) -> int:
     prev_gpu_w = gpu.watts()
     dropped = int(meta_get(db, "dropped_intervals", "0") or 0)
     last_prune = 0.0
+    last_gpu_probe = 0.0
 
     while True:
+        # --- re-probe a missing GPU source ---------------------------------
+        # NVML is unavailable until the NVIDIA kernel module is loaded, so a
+        # daemon that started during boot (or after a driver reload) finds no
+        # GPU term and would otherwise keep recording 0 W for the whole run.
+        # Unlike sysfs, NVML has no device node for us to block on, so poll
+        # for it. Retrying also revives a handle that went stale in a driver
+        # reload (watts() marks `_dead` on a failed call). RAPL re-probes on
+        # read failure for the same reason; this is that path for the GPU.
+        if not gpu.available and time.monotonic() - last_gpu_probe >= 30:
+            last_gpu_probe = time.monotonic()
+            retry = GpuSensor(cfg)
+            if retry.available:
+                gpu = retry
+                print(f"omaenergy: GPU source {gpu.descriptor} "
+                      f"(label {gpu.label or '?'}, cap {gpu.cap_w or '?'} W) "
+                      f"is now available", file=sys.stderr)
+                prev_gpu_w = gpu.watts()
+                with db:
+                    meta_set(db, "gpu_source", gpu.descriptor)
+                    meta_set(db, "gpu_skipped", gpu.skipped_reason)
+
         # --- integrate the GPU across the interval -----------------------
         # The CPU term is a counter and needs only two reads, but the GPU term
         # is a power estimate, so it is sampled `gpu_interval` apart and
