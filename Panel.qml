@@ -161,6 +161,25 @@ Panel {
     "tariff", "currency", "currency_symbol", "cost_decimals",
     "baseline_w", "psu_efficiency"
   ]
+  // Single source for the save confirmation sentence, shared by the
+  // viewport toast. A confirmation that proves the value is live, not just
+  // written: "Saved" alone asks to be trusted; naming the figure the save
+  // just moved lets the user check it.
+  readonly property string saveNoteText: {
+    if (configSavedKeys === "")
+      return "Nothing to save: no value changed."
+    var head = "Saved " + configSavedKeys + "."
+    // One save can touch both kinds of key, so the clauses are
+    // additive rather than exclusive. The restart clause follows
+    // the button's own condition: a sentence pointing at a button
+    // that is not rendered is worse than no sentence.
+    if (retroactiveSave)
+      head += " Applied to the whole history: today now reads "
+        + formatKwh(todayKwh) + " / " + formatCost(todayCost) + "."
+    if (restartRequired)
+      head += " Sampling changes need the restart below."
+    return head
+  }
   readonly property bool configFieldFocused: configFocusCount > 0
   property int configDraftGen: 0
 
@@ -601,6 +620,9 @@ Panel {
   function openConfig() {
     configOpen = true
     configSaveError = ""
+    configSavedShown = false
+    configSavedKeys = ""
+    savedNoteTimer.stop()
     restartRequired = false
     configFocusCount = 0
     loadConfig()
@@ -611,6 +633,9 @@ Panel {
   function closeConfig() {
     if (root.bar) root.bar.hideTooltip(gearHit)
     configOpen = false
+    configSavedShown = false
+    configSavedKeys = ""
+    savedNoteTimer.stop()
     configFocusCount = 0
     currencyPopupOpen = false
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
@@ -722,6 +747,9 @@ Panel {
     pollNow()
     refreshPanelData()
     loadConfig()
+    // A save that resolves after the pane closed must not resurface later:
+    // openConfig/closeConfig already cleared the toast, so leave it cleared.
+    if (!configOpen) return
     configSavedShown = true
     savedNoteTimer.restart()
   }
@@ -1625,36 +1653,6 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            // A confirmation that proves the value is live, not just written.
-            // "Saved" alone asks to be trusted; naming the figure the save just
-            // moved lets the user check it. The whole point of a retroactive
-            // tariff is that today's cost changes the instant it lands, and
-            // this pane is covering the place that number is normally shown.
-            Text {
-              textFormat: Text.PlainText
-              visible: root.configSavedShown && root.configSaveError === ""
-              width: parent.width
-              color: root.accent
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-              text: {
-                if (root.configSavedKeys === "")
-                  return "Nothing to save: no value changed."
-                var head = "Saved " + root.configSavedKeys + "."
-                // One save can touch both kinds of key, so the clauses are
-                // additive rather than exclusive. The restart clause follows
-                // the button's own condition: a sentence pointing at a button
-                // that is not rendered is worse than no sentence.
-                if (root.retroactiveSave)
-                  head += " Applied to the whole history: today now reads "
-                    + root.formatKwh(root.todayKwh) + " / " + root.formatCost(root.todayCost) + "."
-                if (root.restartRequired)
-                  head += " Sampling changes need the restart below."
-                return head
-              }
-            }
-
             Row {
               spacing: Style.space(8)
 
@@ -1694,6 +1692,41 @@ Panel {
               wrapMode: Text.WordWrap
             }
           }
+        }
+      }
+      // Save confirmation, anchored to the keyCatcher viewport rather than
+      // the scrolled column: it stays in frame whatever the scroll offset.
+      // Top placement keeps it clear of the bottom Save/Restart buttons.
+      BorderSurface {
+        id: saveToast
+        visible: root.configOpen && root.configSavedShown && root.configSaveError === ""
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.leftMargin: Style.space(12)
+        anchors.rightMargin: Style.space(12)
+        anchors.topMargin: Style.space(12)
+        z: 10
+        color: Color.background
+        borderSpec: Border.flat(root.accent, Style.normalBorderWidth)
+        padding: Style.space(8)
+        radius: Style.cornerRadius
+        height: saveToast.contentTopInset + saveToast.contentBottomInset + saveToastText.implicitHeight
+
+        Text {
+          id: saveToastText
+          textFormat: Text.PlainText
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.leftMargin: saveToast.contentLeftInset
+          anchors.rightMargin: saveToast.contentRightInset
+          anchors.topMargin: saveToast.contentTopInset
+          text: root.saveNoteText
+          color: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
       }
     }

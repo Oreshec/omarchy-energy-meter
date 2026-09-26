@@ -204,10 +204,12 @@ omarchy-shell io.github.kevzakaria.energy-meter settings
 ```
 
 Inside the pane, `Enter` saves and `Escape` closes, from a field or from the
-pane itself. A save confirms what it wrote: a price or a baseline shows the
-figure it just moved, since those apply to the whole history and the point is
-that you can watch the number change; a sampling key tells you it needs the
-restart button instead.
+pane itself. Save confirmations appear as an in-frame toast at the top of the
+panel, independent of scrolling, and disappear after six seconds. Closing
+settings clears the toast. A save confirms what it wrote: a price or a
+baseline shows the figure it just moved, since those apply to the whole
+history and the point is that you can watch the number change; a sampling key
+tells you it needs the restart button instead.
 
 ---
 

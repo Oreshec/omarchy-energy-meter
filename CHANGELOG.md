@@ -47,6 +47,13 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   edge, which is what made those views look empty; they now fill the
   plot the way Day already did.
 
+**Fixed**
+
+- Settings save confirmations now appear as a six-second toast anchored inside
+  the panel instead of below the settings fields, so they remain visible
+  without scrolling to the Save button. Saving again restarts the timeout;
+  closing settings clears the confirmation.
+
 ## 1.2.5
 
 **Fixed**
