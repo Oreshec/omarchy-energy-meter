@@ -832,7 +832,17 @@ class GpuSensor:
         self.candidates: list[dict] = []
         self._nvml = None
         self._nvml_handle = 0
+        self._nvml_detail = ""
+        self._nvml_pending = False
         self._dead = False
+        # Whether re-probing this same config could still turn up a GPU term.
+        # The rule is one sentence: only a driver that is installed but not yet
+        # answering is worth waiting for. So `off`, a mistyped path, a machine
+        # with no NVIDIA driver at all, an APU-only machine, a card that reports
+        # no power, and an amdgpu machine that answered are all final -- and the
+        # daemon polls this flag, so re-probing them would buy the same answer
+        # over and over for the life of the process.
+        self.retryable = False
 
         mode = str(cfg.get("gpu_source", "auto"))
         if mode == "off":
@@ -859,6 +869,10 @@ class GpuSensor:
         if self._open_nvidia():
             return
 
+        # NVML was the last input that could have changed the answer, so whether
+        # a re-probe is worth running is NVML's verdict rather than ours.
+        self.retryable = self._nvml_pending
+
         if mode == "auto" and amd:
             # The only amdgpu sensor is the APU's iGPU, already inside the RAPL
             # package figure, and no NVIDIA card could take its place.
@@ -869,6 +883,8 @@ class GpuSensor:
         self.skipped_reason = (
             "no amdgpu power sensor found, and no NVIDIA GPU via NVML"
             if mode == "auto" else "no NVIDIA GPU via NVML")
+        if self._nvml_detail:
+            self.skipped_reason += f" ({self._nvml_detail})"
 
     def _amd_candidates(self) -> list[dict]:
         for hwmon in sorted(HWMON_ROOT.glob("hwmon*")):
@@ -904,10 +920,22 @@ class GpuSensor:
         """Probe the NVIDIA Management Library through ctypes -- it ships with
         the proprietary driver, so there is no Python dependency to add. Picks
         the card with the highest enforced power limit and leaves NVML
-        initialised for `watts()`."""
+        initialised for `watts()`.
+
+        Every card is power-read once before it is eligible. A part that
+        answers `NVML_ERROR_NOT_SUPPORTED` must never be selected: `watts()`
+        marks the source dead on a failed call, the daemon re-probes, picks the
+        same card, announces it, and dies again -- the same pair of journal
+        lines every 30 s for as long as the daemon ran. A card that cannot be
+        read is not a GPU term, and is reported as one instead."""
         try:
             lib = ctypes.CDLL("libnvidia-ml.so.1")
         except OSError:
+            # The library is a package artifact, not a module artifact: if it
+            # is absent, no NVIDIA driver is installed, and no amount of
+            # waiting will install one. Answered, so not re-probeable.
+            self._nvml_detail = ("libnvidia-ml.so.1 not found (NVIDIA "
+                                 "proprietary driver not installed)")
             return False
 
         def bind(symbol):
@@ -924,24 +952,50 @@ class GpuSensor:
         limit = bind("nvmlDeviceGetEnforcedPowerLimit")
         power = bind("nvmlDeviceGetPowerUsage")
         if not (init and count and handle and name and power):
-            return False  # too old a driver: treat as no NVML
+            # Too old a driver. A module load will not add the symbol back.
+            self._nvml_detail = "libnvidia-ml.so.1 has no nvmlDeviceGetPowerUsage"
+            return False
         handle.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
         name.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
         if limit is not None:
             limit.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
         power.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
 
+        started = False
         try:
-            if init() != 0:
+            rc = init()
+            if rc != 0:
+                # The one answer waiting can change. The library is on disk
+                # from the package, so a failure here is the driver not
+                # answering yet -- NVML_ERROR_DRIVER_NOT_LOADED when the module
+                # is still to come, which on a cold boot can be later than
+                # graphical-session.target.
+                self._nvml_detail = (f"nvmlInit failed (rc={rc}); the NVIDIA "
+                                     "driver may not be loaded yet")
+                self._nvml_pending = True
                 return False
+            started = True
             n = ctypes.c_uint()
-            if count(ctypes.byref(n)) != 0 or n.value == 0:
+            rc = count(ctypes.byref(n))
+            if rc != 0:
                 lib.nvmlShutdown()
+                self._nvml_detail = f"nvmlDeviceGetCount failed (rc={rc})"
                 return False
-        except OSError:
+            if n.value == 0:
+                lib.nvmlShutdown()
+                self._nvml_detail = "NVML reports no devices"
+                return False
+        except OSError as exc:
+            if started:
+                lib.nvmlShutdown()
+            self._nvml_detail = f"NVML probe failed: {exc}"
             return False
 
-        cards = []
+        cards = []      # (candidate, device handle), so the handle kept for
+                        # `watts()` is the one that was read, rather than a
+                        # second lookup by an index parsed back out of a string
+        unreadable = 0
+        unreadable_rc = None
         for i in range(n.value):
             h = ctypes.c_void_p()
             try:
@@ -950,7 +1004,22 @@ class GpuSensor:
             except OSError:
                 continue
             nm = ctypes.create_string_buffer(256)
-            name(h, nm, 256)
+            try:
+                name(h, nm, 256)
+            except OSError:
+                continue
+            # The eligibility test. A card that will not report power is not a
+            # candidate, whatever power limit it advertises.
+            mw = ctypes.c_uint()
+            try:
+                rc = power(h, ctypes.byref(mw))
+            except OSError:
+                unreadable += 1
+                continue
+            if rc != 0:
+                unreadable += 1
+                unreadable_rc = rc
+                continue
             cap_w = 0.0
             if limit is not None:
                 lim = ctypes.c_uint()
@@ -965,24 +1034,48 @@ class GpuSensor:
                 "label": nm.value.decode("utf-8", "replace"),
                 "cap_w": cap_w,
             }
-            cards.append(candid)
             self.candidates.append(candid)
+            cards.append((candid, h))
 
         if not cards:
             lib.nvmlShutdown()
+            # Never print rc=0 for a call that raised: 0 is what success
+            # returns, and this string is the only record of why the card was
+            # passed over.
+            how = (f"rc={unreadable_rc}" if unreadable_rc is not None
+                   else "the call raised")
+            self._nvml_detail = (
+                f"{unreadable} NVIDIA device(s) report no power ({how})"
+                if unreadable else f"none of {n.value} NVML device(s) could be opened")
             return False
-        chosen = max(cards, key=lambda c: c["cap_w"])
-        h = ctypes.c_void_p()
-        if handle(int(chosen["hwmon"].split(":")[1]), ctypes.byref(h)) != 0:
-            lib.nvmlShutdown()
-            return False
+        chosen, dev = max(cards, key=lambda c: c[0]["cap_w"])
         self.kind = "nvidia"
         self._nvml = lib
-        self._nvml_handle = int(h.value or 0)
+        self._nvml_handle = int(dev.value or 0)
         self.descriptor = chosen["hwmon"]
         self.label = chosen["label"]
         self.cap_w = chosen["cap_w"]
         return True
+
+    def close(self) -> None:
+        """Release the NVML session, if this sensor opened one.
+
+        `nvmlInit` is refcounted, so a probe that is dropped without a matching
+        shutdown leaves the driver initialised for the rest of the process'
+        life. The daemon re-probes, so that is not hypothetical: without this,
+        each retry would add a session rather than replace one."""
+        if self._nvml is None:
+            return
+        try:
+            self._nvml.nvmlShutdown()
+        except OSError:
+            pass
+        self._nvml = None
+        self._nvml_handle = 0
+        # A closed sensor holds no source, and must not go on reporting one
+        # that reads 0 W: `available` is what `status` and the daemon's
+        # re-probe branch both read.
+        self._dead = True
 
     @staticmethod
     def _readable(path: Path) -> bool:
@@ -1019,14 +1112,17 @@ class GpuSensor:
                 rc = self._nvml.nvmlDeviceGetPowerUsage(self._nvml_handle,
                                                         ctypes.byref(mw))
             except OSError:
-                self._dead = True
-                return 0.0
+                rc = -1
             if rc != 0:
                 # A failed NVML call usually means the handle went stale in a
                 # driver reload; mark the source dead so the daemon re-probes.
+                # The same reload is what can bring the card back, so this is
+                # the one way an otherwise-answered machine becomes worth
+                # re-probing again.
                 self._dead = True
+                self.retryable = True
                 return 0.0
-            return mw.value / 1000.0 if rc == 0 else 0.0
+            return mw.value / 1000.0
         if self.path is None:
             return 0.0
         try:
@@ -1196,6 +1292,7 @@ def run_daemon(args: argparse.Namespace) -> int:
         print("omaenergy: no readable RAPL package zone. Install the udev rule "
               "(see README) and make sure you are in the 'wheel' group. "
               "Refusing to record samples with no CPU energy.", file=sys.stderr)
+        gpu.close()
         return 1
     if gpu.available:
         print(f"omaenergy: GPU source {gpu.descriptor} (label {gpu.label or '?'}, "
@@ -1223,6 +1320,7 @@ def run_daemon(args: argparse.Namespace) -> int:
     dropped = int(meta_get(db, "dropped_intervals", "0") or 0)
     last_prune = 0.0
     last_gpu_probe = 0.0
+    gpu_probe_every = 30.0
 
     while True:
         # --- re-probe a missing GPU source ---------------------------------
@@ -1233,11 +1331,23 @@ def run_daemon(args: argparse.Namespace) -> int:
         # for it. Retrying also revives a handle that went stale in a driver
         # reload (watts() marks `_dead` on a failed call). RAPL re-probes on
         # read failure for the same reason; this is that path for the GPU.
-        if not gpu.available and time.monotonic() - last_gpu_probe >= 30:
+        #
+        # `retryable` is what keeps this from turning into a poll of its own:
+        # `off`, a mistyped path, an APU-only machine, an Intel-only machine
+        # and a card that answers but reports no power have all given their
+        # final answer, and re-running the probe for them would cost a dlopen
+        # every 30 s to learn the same thing. The interval backs off as well,
+        # so a card that goes live and dies again settles at one probe per ten
+        # minutes rather than logging that pair of lines every 30 s.
+        if (not gpu.available and gpu.retryable
+                and time.monotonic() - last_gpu_probe >= gpu_probe_every):
             last_gpu_probe = time.monotonic()
+            gpu_probe_every = min(gpu_probe_every * 2, 600.0)
             retry = GpuSensor(cfg)
             if retry.available:
+                gpu.close()  # nvmlShutdown before the new session opens
                 gpu = retry
+                gpu_probe_every = 30.0
                 print(f"omaenergy: GPU source {gpu.descriptor} "
                       f"(label {gpu.label or '?'}, cap {gpu.cap_w or '?'} W) "
                       f"is now available", file=sys.stderr)
@@ -1279,6 +1389,7 @@ def run_daemon(args: argparse.Namespace) -> int:
                 # complete when they are missing the largest measured term.
                 print("omaenergy: RAPL is no longer readable; exiting rather "
                       "than recording samples without CPU energy.", file=sys.stderr)
+                gpu.close()
                 return 1
             rapl.delta_uj()
             prev_gpu_w = gpu.watts()

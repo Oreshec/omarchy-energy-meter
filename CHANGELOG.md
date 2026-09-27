@@ -54,6 +54,38 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   without scrolling to the Save button. Saving again restarts the timeout;
   closing settings clears the confirmation. (#5)
 
+- An NVIDIA GPU term, read through NVML (`nvmlDeviceGetPowerUsage`, loaded with
+  `ctypes` from the `libnvidia-ml.so.1` that ships with the proprietary driver,
+  so no dependency is added). NVIDIA exposes no power sensor through sysfs, so
+  a machine with a discrete NVIDIA card carried a GPU term of a hard 0 W: on a
+  desktop RTX 3050 at idle, 16 W of draw was simply not in the total and
+  `measured_share` read 0.57 rather than 0.62. **NVIDIA users' numbers move,
+  and their hardware did not** -- the term was being read as zero.
+
+  Card selection mirrors the amdgpu rule of taking the highest power
+  capability, using the enforced power limit in place of `power1_cap`: NVML
+  index order is probe order rather than card order, so the lowest index is
+  not reliably the card worth reading. `gpu_source` gains `nvidia` to force
+  the backend, and `auto` still prefers amdgpu and only falls back to NVML --
+  which is also what lets a Ryzen-with-Radeon laptop read its dGPU instead of
+  dropping the term to the APU double-count guard. `omaenergy status` reports
+  `gpu_kind`, `gpu_sensor` (`nvml:N`), `gpu_label` and `gpu_cap_w`, and lists
+  the devices it weighed under `gpu_candidates`.
+
+  NVML only answers once the kernel module is loaded, which on a cold boot can
+  be later than `graphical-session.target`, so the daemon re-probes while NVML
+  itself is unavailable and revives a handle that a driver reload retired. It
+  does not re-probe a machine that has already answered -- `off`, a mistyped
+  path, an APU-only or Intel-only machine, a card that reports no power -- so
+  the poll costs nothing on hardware that will never gain a term. A card is
+  power-read once before it is selected, so a part that reports
+  `NVML_ERROR_NOT_SUPPORTED` is named in `gpu_skipped` instead of being
+  chosen and re-announced every 30 s.
+
+  Verified on a desktop, so the one case it does not cover is a hybrid laptop,
+  where polling a dGPU once a second may be what keeps it from sleeping. That
+  is untested rather than fine. (#3)
+
 ## 1.2.5
 
 **Fixed**

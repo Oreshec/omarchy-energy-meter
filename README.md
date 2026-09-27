@@ -536,7 +536,7 @@ integrating it into a plausible-looking number.
 | AMD APU (integrated graphics) | CPU term only. The iGPU is already inside the RAPL package figure, and amdgpu's `power1_average` on an APU is documented to include the CPU, so counting it would nearly double the machine. The GPU term is dropped and the reason is reported in `status` |
 | Ryzen 7000/9000 desktop with RDNA2 iGPU | **Unverified.** `cpu_has_integrated_gpu()` treats a CPU as an APU only if `radeon` appears in the `/proc/cpuinfo` `model name`, which those parts do not carry, so the double-count guard does not fire and an iGPU could be added on top of a package figure that already includes it. Workaround: `gpu_source=off` |
 | Multiple AMD GPUs | The card with the highest `power1_cap` is chosen, never the lowest hwmon index: `hwmon10` sorts before `hwmon2`, so index order would happily measure a 15 W iGPU and ignore a 300 W card |
-| NVIDIA GPU (proprietary driver) | **Verified on an RTX 3050 (Ampere).** Power comes from NVML (`nvmlDeviceGetPowerUsage`) loaded through `ctypes`, so there is still no Python dependency. Reads 0 W on cards/drivers where power monitoring is not exposed, and `nvidia-smi` is not used, so a permissions failure cannot nuke the daemon. Multiple NVIDIA cards: the one with the highest enforced power limit is chosen, mirroring the amdgpu rule |
+| NVIDIA GPU (proprietary driver) | **Verified on an RTX 3050 (Ampere) desktop, non-root.** Power comes from NVML (`nvmlDeviceGetPowerUsage`) loaded through `ctypes`, so there is still no Python dependency. Every card is power-read once before it is eligible, so a card or driver that does not expose power monitoring is passed over and named under `gpu_skipped` rather than chosen and read as 0 W. `nvidia-smi` is not used, so a permissions failure cannot nuke the daemon. Multiple NVIDIA cards: the one with the highest enforced power limit is chosen, mirroring the amdgpu rule. A driver that is installed but not yet answering (`nvmlInit` failing, e.g. the module loading after `graphical-session.target` on a cold boot) is re-probed by the daemon until it does; a machine with no NVIDIA driver at all is not polled. **Not verified on a hybrid laptop**, where a 1 Hz poll may keep a sleeping dGPU awake |
 | Intel GPU | Not read. The GPU term is recorded as 0 W rather than omitted; `omaenergy status` names the reason under `gpu_skipped` |
 | Intel `psys` / `dram` zones | **Detected, not used.** `psys` would be strictly better than package-plus-estimate and `dram` would shrink the estimate, but neither could be verified on real hardware here. `omaenergy status` lists them as available and unused |
 | No readable RAPL | The daemon refuses to start rather than record rows with no CPU energy |
@@ -622,7 +622,8 @@ in `wheel`. Run `install.sh` again, or check `id` and
 **GPU reads 0 W**: expected on Intel graphics, and on AMD APUs (the iGPU is
 already inside the RAPL package figure). On NVIDIA, it means the proprietary
 driver is not loaded or the card does not expose power monitoring.
-`omaenergy status` names the reason under `gpu_skipped`.
+`omaenergy status` names the reason under `gpu_skipped`, and says which of the
+two it was.
 
 **Widget edits appear to do nothing**: saving a file reloads plugin *code* but
 does not re-instantiate an already-mounted bar widget. Run
