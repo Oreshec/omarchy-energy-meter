@@ -1321,6 +1321,7 @@ def run_daemon(args: argparse.Namespace) -> int:
     last_prune = 0.0
     last_gpu_probe = 0.0
     gpu_probe_every = 30.0
+    gpu_live_since = time.monotonic()  # when the current source was acquired
 
     while True:
         # --- re-probe a missing GPU source ---------------------------------
@@ -1339,6 +1340,15 @@ def run_daemon(args: argparse.Namespace) -> int:
         # every 30 s to learn the same thing. The interval backs off as well,
         # so a card that goes live and dies again settles at one probe per ten
         # minutes rather than logging that pair of lines every 30 s.
+        #
+        # A successful probe does not reset that interval by itself: a flapping
+        # card succeeds at every probe, so resetting there would pin it at 30 s
+        # forever. Only a source that has then stayed readable for ten minutes
+        # earns the short interval back, because its next failure is a new
+        # event (a driver reload) rather than the same flap again.
+        if (gpu.available and gpu_probe_every > 30.0
+                and time.monotonic() - gpu_live_since >= 600.0):
+            gpu_probe_every = 30.0
         if (not gpu.available and gpu.retryable
                 and time.monotonic() - last_gpu_probe >= gpu_probe_every):
             last_gpu_probe = time.monotonic()
@@ -1347,7 +1357,7 @@ def run_daemon(args: argparse.Namespace) -> int:
             if retry.available:
                 gpu.close()  # nvmlShutdown before the new session opens
                 gpu = retry
-                gpu_probe_every = 30.0
+                gpu_live_since = time.monotonic()
                 print(f"omaenergy: GPU source {gpu.descriptor} "
                       f"(label {gpu.label or '?'}, cap {gpu.cap_w or '?'} W) "
                       f"is now available", file=sys.stderr)
