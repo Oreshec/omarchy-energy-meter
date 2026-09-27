@@ -238,7 +238,9 @@ There is no enforced commit convention in this ecosystem. Please still:
 - **a Changelog entry in `CHANGELOG.md`** under `Unreleased`, if the change is
   visible to a user: a new setting, a renamed JSON field, a number that moves.
   Say what moved and why, because someone will diff last month's kWh against
-  this month's and deserve to know whether the machine changed or the maths did
+  this month's and deserve to know whether the machine changed or the maths did.
+  End the entry with the PR number, `(#12)`; the release notes credit authors
+  from the PR list, so the changelog carries no names
 - leave `preview.png` alone unless the UI actually changed
 - any new image gets an explicit width in the README
   (`<img src="..." width="...">`). A bare `![](...)` renders at full container
@@ -308,61 +310,57 @@ new `main` SHA, and start a fresh `Unreleased` section on `release`.
 
 ### Release notes
 
-Notes are a hand-written summary followed by GitHub's generated list. The
-generated half is categorised by
+Draft them with the script, from the changelog:
+
+```sh
+scripts/release-notes.sh 1.3.0 main > notes.md   # after the cut is pushed
+$EDITOR notes.md                                  # replace the TODO line
+gh release create v1.3.0 --target main --title v1.3.0 --notes-file notes.md
+```
+
+Run it before the cut with the default target, `release`, to preview. It then
+reads `## Unreleased`, since the cut is what renames that heading.
+
+A draft has four parts, in this order:
+
+1. **`Upgrade:`**, the one line every reader needs, computed from which files
+   changed since the previous tag. `bin/omaenergy` or `systemd/` means re-run
+   `install.sh`: the daemon and the widget run the copy in
+   `~/.local/bin/omaenergy`, and `omarchy plugin update` does not replace it.
+   `udev/` means the installer asks for `sudo`. Any `.qml` means
+   `omarchy restart shell`, since a mounted widget keeps its old code. v1.2.5
+   told readers to "update" when its fix was in the daemon, which left
+   everyone who followed it on the crashing build; this line exists so that
+   cannot be a matter of remembering. Rewrite it by hand only where the script
+   cannot know, such as a comment-only change under `udev/` (the script warns).
+2. **One or two sentences** on what the release means for a reader. This is the
+   `TODO` line and the only part the script cannot write.
+3. **`Thanks to @…`** for every PR author in the range except the owner and
+   bots. Credit help that did not land as a merged PR (testing, a duplicate
+   implementation that shaped the one merged) by adding to this line by hand.
+4. **The `CHANGELOG.md` section** as `### Added` / `### Changed` / `### Fixed`,
+   then GitHub's generated `## What's Changed` and `## New Contributors`, and
+   the compare link. That is why `gh release create` gets no
+   `--generate-notes`: the list is already in the draft.
+
+The changelog stays hard-wrapped for reading in a terminal. The script joins
+those lines, because a release body renders every newline as `<br>`, and the
+first six releases went out ragged because of it.
+
+The generated list is categorised by
 [`.github/release.yml`](.github/release.yml), so **one label per PR** is what
 makes it readable; `Maintenance` catches `*`, so an unlabelled PR is listed
-rather than dropped. `Accuracy & correctness` is deliberately near the top:
-in a tool whose job is to report a number, a change that moves that number
-matters more to a reader than a new feature.
+rather than dropped. `Accuracy & correctness` is deliberately near the top: in
+a tool whose job is to report a number, a change that moves that number
+matters more to a reader than a new feature. A wrong category in the draft
+usually means a wrong PR label: fix the label and run the script again.
 
-```sh
-gh release create v1.2.0 \
-  --target main \
-  --title v1.2.0 \
-  --generate-notes \
-  --notes-start-tag v1.1.0 \
-  --notes-file - <<'EOF'
-## Highlights
+A range with no merged PRs (everything up to v1.0.0 landed as direct commits)
+gets only the compare link after the changelog section.
 
-### Added
-
-- One sentence per user-visible change, with the PR link.
-
-### Fixed
-
-- What moved, and by how much. A number without a reference is not evidence:
-  "GPU integration bias -2.03% -> -0.39% against a dense 100 ms trace" is
-  useful, "improved GPU accuracy" is not.
-EOF
-```
-
-`--notes-file -` supplies the Highlights; `--generate-notes` appends
-`## What's Changed` and the full-changelog compare link beneath it. Check the
-result and edit on GitHub if a category came out wrong, which usually means a
-PR label was wrong.
-
-Preview the generated half before tagging, so a bad label is caught then rather
-than in public:
-
-```sh
-gh api -X POST repos/kevzakaria/omarchy-energy-meter/releases/generate-notes \
-  -f tag_name=vNEXT -f target_commitish=release -q .body
-```
-
-For **v1.0.0** the generated half comes out nearly empty, because everything up
-to it landed as direct commits rather than PRs. There is no PR history to
-categorise. Drop `--notes-start-tag`, and let the Highlights carry the whole
-story; `CHANGELOG.md` already has it in the right shape to lift from.
-Releases after that get the categorised list for free, provided PRs are
-labelled.
-
-**Say plainly what the release does and does not do for a reader.** A GitHub
-Release updates nobody: installs track `main`, so the tag is a human-readable
-record, not a distribution channel. If a version needs an action (a
-`systemctl --user restart omarchy-energy` because `interval_s` handling changed,
-or `install.sh` re-run because the unit or udev rule changed), put that at the
-top of the Highlights, because nothing else will tell the user.
+A GitHub Release updates nobody: installs track `main`, so the tag is a
+human-readable record, not a distribution channel. The `Upgrade:` line is the
+only place a reader learns what they have to do.
 
 **Never force-push or rebase `main`.** `omarchy-plugin-update` merges with
 `--ff-only`, so a rewritten history is not a fast-forward from what users have

@@ -19,12 +19,12 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
 - A Custom period on the panel, whose span is the new `chartCustomDays`
   widget setting (1-365 days, default 14). Day, Week, Month, and Year were
   already there; Custom is the one whose length is yours rather than a
-  calendar bucket.
+  calendar bucket. (#5)
 
 - A background behind the graph's hover readout, because the text sat on
   the trace and was illegible where the two crossed. Colour is the new
   `chartHoverLabelColor` widget setting (hex, default `#000000`) and
-  opacity is `chartHoverLabelOpacity` (0-100%, default 50).
+  opacity is `chartHoverLabelOpacity` (0-100%, default 50). (#5)
 
 **Changed**
 
@@ -32,27 +32,27 @@ own. See [CONTRIBUTING → Release](CONTRIBUTING.md#release--marketplace).
   last 24 hours. The filter used to drive only the bucket list underneath
   the sparkline, so switching to Month still showed a day of watts. The
   filter row now sits above the graph, because that is the control that
-  decides what both of them show.
+  decides what both of them show. (#5)
 
 - Windows longer than `raw_retention_days` (default 30) are drawn from the
   permanent daily rollup, one point per day, rather than from raw samples.
   Raw rows are pruned at that age, so a year of interval points does not
   exist to plot. The rollup is what the week/month/year buckets already
   use; the graph now uses it too when the requested window is older than
-  the samples table can still hold.
+  the samples table can still hold. (#5)
 
 - The graph's axis starts at the first recorded point when the selected
   period predates the history. A Month or Year window with only a few
   days of data used to plot those days as a sliver against the right
   edge, which is what made those views look empty; they now fill the
-  plot the way Day already did.
+  plot the way Day already did. (#5)
 
 **Fixed**
 
 - Settings save confirmations now appear as a six-second toast anchored inside
   the panel instead of below the settings fields, so they remain visible
   without scrolling to the Save button. Saving again restarts the timeout;
-  closing settings clears the confirmation.
+  closing settings clears the confirmation. (#5)
 
 ## 1.2.5
 
